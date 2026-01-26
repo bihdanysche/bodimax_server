@@ -1,4 +1,4 @@
-import { ConflictException, Injectable, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { PrismaService } from "src/prisma/prisma.service";
 import { RegisterDTO } from "./dtos/RegisterDTO";
@@ -9,12 +9,14 @@ import { PrismaClientKnownRequestError } from "@prisma/client/runtime/client";
 import * as crypto from "crypto";
 import { Request, Response } from "express";
 import { LoginDTO } from "./dtos/LoginDTO";
+import { AppConfig } from "src/config/config";
 
 @Injectable()
 export class AuthService {
     IS_PROD = process.env.NODE_ENV === 'production';
-    ACCESS_TOKEN_AGE = parseInt(process.env.ACCESS_TOKEN_AGE || "60000");
-    REFRESH_TOKEN_AGE = parseInt(process.env.REFRESH_TOKEN_AGE || "2592000000");
+    ACCESS_TOKEN_AGE = AppConfig.ACCESS_TOKEN_AGE;
+    REFRESH_TOKEN_AGE = AppConfig.REFRESH_TOKEN_AGE;
+    
     constructor(
         private readonly prisma: PrismaService,
         private readonly jwt: JwtService
@@ -97,7 +99,35 @@ export class AuthService {
             throw new UnauthorizedException({code: ErrorCode.REFRESH_TOKEN_INVALID});
         }
 
-        await this.issueToken(req.user as number, res, tok.id);
+        await this.issueToken(req.user!.userId, res, tok.id);
+    }
+
+    async getSessions(sessionId: number, userId: number) {
+        const list = await this.prisma.refreshToken.findMany({
+            where: { userId },
+            omit: { hash: true, userId: true }
+        });
+        return list.map(el => ({...el, isCurrentSession: el.id === sessionId}));
+    }
+
+    async shutdownSession(userId: number, sessionId: number, currentSessionId: number) {
+        if (sessionId === currentSessionId) {
+            throw new BadRequestException({
+                code: ErrorCode.CANNOT_SHUTDOWN_CURRENT_SESSION
+            });
+        }
+
+        try {
+            await this.prisma.refreshToken.delete({
+                where: { id: sessionId, userId}
+            });
+        } catch (e) {
+            if (e instanceof PrismaClientKnownRequestError && e.code === 'P2025') {
+                throw new NotFoundException({
+                    code: ErrorCode.INVALID_SESSION
+                });
+            }
+        }
     }
 
     async issueToken(userId: number, res: Response, refreshTokenId?: number) {

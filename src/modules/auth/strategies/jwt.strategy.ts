@@ -25,7 +25,7 @@ export class JwtCookieStrategy extends PassportStrategy(Strategy, "jwt-cookie") 
         });
     }
 
-    async validate(payload: { sessionId: number }) {
+    async validate(payload: { sessionId: number }): Promise<Express.User> {
         const session = await this.prismaService.refreshToken.findUnique({
             where: {id: payload.sessionId},
             select: {userId: true}
@@ -37,6 +37,6 @@ export class JwtCookieStrategy extends PassportStrategy(Strategy, "jwt-cookie") 
             })
         }
         
-        return session.userId;
+        return { userId: session.userId, sessionId: payload.sessionId };
     }
 }

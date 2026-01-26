@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Post, Req, Res, UnauthorizedException, UseGuards } from "@nestjs/common";
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, ParseIntPipe, Post, Req, Res, UnauthorizedException, UseGuards } from "@nestjs/common";
 import { AuthService } from "./auth.service";
 import { RegisterDTO } from "./dtos/RegisterDTO";
 import type { Request, Response } from "express";
@@ -7,6 +7,7 @@ import { LoginDTO } from "./dtos/LoginDTO";
 import { AuthGuard } from "./guards/auth.guard";
 import { UserId } from "./decorators/user-id.decorator";
 import { ErrorCode } from "src/exception-filter/errors.enum";
+import { SessionId } from "./decorators/session-id";
 
 @Controller("auth")
 export class AuthController {
@@ -37,6 +38,19 @@ export class AuthController {
         res.status(HttpStatus.NO_CONTENT).end();
     }
 
+    @Get("sessions")
+    @UseGuards(AuthGuard)
+    async getSessions(@UserId() usId: number, @SessionId() sId: number) {
+        return await this.auth.getSessions(sId, usId);
+    }
+
+    @Delete("sessions/:id")
+    @UseGuards(AuthGuard)
+    @HttpCode(HttpStatus.NO_CONTENT)
+    async rejectSession(@Param("id", ParseIntPipe) sessionId: number, @SessionId() currentSessionId: number, @UserId() userId: number) {
+        await this.auth.shutdownSession(userId, sessionId, currentSessionId);
+    }
+
     @Post("logout")
     @UseGuards(AuthGuard)
     async logout(@Req() req: Request, @Res() res: Response) {
@@ -49,11 +63,5 @@ export class AuthController {
     @UseGuards(AuthGuard)
     async logoutOtherSessions(@UserId() usId: number, @Req() req: Request) {
         await this.auth.logoutOtherSessions(usId, req);
-    }
-
-    @Get("/check")
-    @UseGuards(AuthGuard)
-    check(@UserId() usId: number) {
-        return `Hi, ${usId}!`;
     }
 }
