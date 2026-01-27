@@ -50,14 +50,17 @@ model Comment {
   postId      Int
   post        Post       @relation(fields: [postId], references: [id])
 
-  parentId    Int?
-  parent      Comment?   @relation("CommentReply", fields: [parentId], references: [id])
+  parentId      Int?
+  parent        Comment?   @relation("CommentParent", fields: [parentId], references: [id])
+  parentReplies Comment[]  @relation("CommentParent")
 
-  replies     Comment[]  @relation("CommentReply")
+  repliedToId  Int?       
+  repliedTo    Comment?    @relation("CommentReplied", fields: [repliedToId], references: [id])
+  replyFrom    Comment[]   @relation("CommentReplied")
 
   content     String
   editedAt    DateTime?
-  createdAt   DateTime   @default(now())
+  createdAt   DateTime     @default(now())
 
   @@index([id, postId, authorId, parentId])
 }

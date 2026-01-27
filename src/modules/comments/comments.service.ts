@@ -13,12 +13,29 @@ export class CommentsService {
 
     async createComment(dto: NewCommentDTO, authorId: number) {
         try {
+            let parentId: number | undefined = undefined;
+
+            if (dto.replyTo) {
+                const comment = await this.prisma.comment.findUniqueOrThrow({
+                    where: {
+                        id: dto.replyTo
+                    }
+                });
+
+                if (comment.postId !== dto.postId) {
+                    throw new Error();
+                }
+
+                parentId = comment.parentId ? comment.parentId : dto.replyTo;
+            }
+
             return await this.prisma.comment.create({
                 data: {
                     content: dto.content,
-                    parentId: dto.replyTo,
                     postId: dto.postId,
+                    repliedToId: dto.replyTo,
                     authorId,
+                    parentId,
                 }
             });
         } catch {
@@ -63,6 +80,57 @@ export class CommentsService {
     }
 
     async getCommentsFromPost(postId: number, dto: FilterCommentsDTO) {
-        
+         const comments = await this.prisma.comment.findMany({
+            where: {
+                postId,
+                parentId: dto.parentId || null
+            },
+            take: dto.take + 1,
+            cursor: dto.cursor ? { id: dto.cursor } : undefined,
+            orderBy: { createdAt: dto.parentId ? "asc" : "desc" },
+            include: {
+                author: {
+                    select: { firstName: true, lastName: true, username: true }
+                },
+                _count: {
+                    select: { parentReplies: true }
+                },
+                parentReplies: {
+                    take: 1,
+                    orderBy: { createdAt: "asc" },
+                    include: {
+                        author: {
+                            select: { firstName: true, lastName: true, username: true }
+                        },
+                        repliedTo: {
+                            include: {
+                                author: {
+                                    select: { firstName: true, lastName: true, username: true }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+         });
+
+         let nextCursor: number | null = null;
+
+         if (comments.length > dto.take) {
+            const obj = comments.pop();
+            nextCursor = obj!.id;
+         }
+
+         return {
+            results: comments.map(obj => {
+                const {_count, parentReplies, ...rest} = obj;
+                return {
+                    repliesCount: _count.parentReplies,
+                    replies: parentReplies,
+                    ...rest
+                }
+            }),
+            nextCursor
+         }
     }
 }
