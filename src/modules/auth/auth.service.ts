@@ -291,7 +291,7 @@ export class AuthService {
         
         res.cookie("access_token", accessToken, {
             httpOnly: true,
-            sameSite: "none",
+            sameSite: "lax",
             secure: this.IS_PROD,
             maxAge: this.ACCESS_TOKEN_AGE,
             path: "/"
@@ -299,7 +299,7 @@ export class AuthService {
 
         res.cookie("refresh_token", refreshToken, {
             httpOnly: true,
-            sameSite: "none",
+            sameSite: "lax",
             secure: this.IS_PROD,
             maxAge: this.REFRESH_TOKEN_AGE,
             path: "/auth"
@@ -309,7 +309,7 @@ export class AuthService {
     clearCookies(res: Response) {
         res.clearCookie("access_token", {
             httpOnly: true,
-            sameSite: "none",
+            sameSite: "lax",
             secure: this.IS_PROD,
             maxAge: this.ACCESS_TOKEN_AGE,
             path: "/"
@@ -317,10 +317,10 @@ export class AuthService {
 
         res.clearCookie("refresh_token", {
             httpOnly: true,
-            sameSite: "none",
+            sameSite: "lax",
             secure: this.IS_PROD,
             maxAge: this.REFRESH_TOKEN_AGE,
             path: "/auth"
-        });
+        }); 
     }
 }
