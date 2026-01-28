@@ -11,6 +11,8 @@ import { SessionId } from "./decorators/session-id";
 import { ChangePasswordDTO } from "./dtos/ChangePasswordDTO";
 import { SendVerifyEmailDTO } from "./dtos/SendVerifyEmailDTO";
 import { VerifyEmailDTO } from "./dtos/VerifyEmailDTO";
+import { CheckForgotPassCodeDTO } from "./dtos/CheckForgotPassCodeDTO";
+import { ResetPasswordDTO } from "./dtos/ResetPasswordDTO";
 
 @Controller("auth")
 export class AuthController {
@@ -28,7 +30,6 @@ export class AuthController {
     @Post("login")
     @UseGuards(NoAuthGuard)
     async login(@Body() dto: LoginDTO, @Res() res: Response, @Req() req: Request) {
-        console.log("ASD");
         await this.auth.login(dto, res, req);
         res.status(HttpStatus.NO_CONTENT).end();
     }
@@ -52,6 +53,24 @@ export class AuthController {
     @HttpCode(HttpStatus.NO_CONTENT)
     async verifyEmail(@Body() dto: VerifyEmailDTO) {
         await this.auth.verifyEmail(dto);
+    }
+
+    @Post("send-forgot-password-email")
+    @UseGuards(NoAuthGuard)
+    @HttpCode(HttpStatus.NO_CONTENT)
+    async sendForgotPassEmail(@Body() dto: SendVerifyEmailDTO) {
+        await this.auth.sendForgotPasswordEmail(dto);
+    }
+    @Post("check-forgot-pass-code")
+    @UseGuards(NoAuthGuard)
+    async checkForgotPassCode(@Body() dto: CheckForgotPassCodeDTO) {
+        await this.auth.checkForgotPasswordCode(dto);
+    }
+    @Post("confirm-reset-password")
+    @UseGuards(NoAuthGuard)
+    async confirmResetPassword(@Body() dto: ResetPasswordDTO, @Res() res: Response, @Req() req: Request) {
+        await this.auth.confirmResetPassword(dto, res, req);
+        res.status(HttpStatus.NO_CONTENT).end();
     }
 
     @Post("refresh-token")

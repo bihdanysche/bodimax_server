@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Inject, Injectable, InternalServerErrorException, NotFoundException, UnauthorizedException } from "@nestjs/common";
+import { BadRequestException, ConflictException, HttpException, HttpStatus, Inject, Injectable, InternalServerErrorException, NotFoundException, UnauthorizedException } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import { PrismaService } from "src/prisma/prisma.service";
 import { RegisterDTO } from "./dtos/RegisterDTO";
@@ -15,8 +15,10 @@ import { SendVerifyEmailDTO } from "./dtos/SendVerifyEmailDTO";
 import Redis from "ioredis";
 import { MailerService } from "@nestjs-modules/mailer";
 import { REDIS } from "src/redis/redis.module";
-import { generateString, hash256 } from "src/common/helpers/cryptoHelper";
+import { generate6DigitCode, generateString, hash256 } from "src/common/helpers/cryptoHelper";
 import { VerifyEmailDTO } from "./dtos/VerifyEmailDTO";
+import { CheckForgotPassCodeDTO } from "./dtos/CheckForgotPassCodeDTO";
+import { ResetPasswordDTO } from "./dtos/ResetPasswordDTO";
 
 @Injectable()
 export class AuthService {
@@ -100,6 +102,15 @@ export class AuthService {
     }
 
     async sendVerifyEmail(dto: SendVerifyEmailDTO, userId: number) {
+        const ehash = await this.redis.get(`cc:${userId}`);
+        const email = await this.redis.get(`cm:${userId}`);
+
+        if (ehash || email) {
+            throw new BadRequestException({
+                code: ErrorCode.MAIN_ALREADY_SENT
+            })
+        }
+
         const alreadyExistingUser = await this.prisma.user.findUnique({
             where: { email: dto.email },
             select: { id: true }
@@ -141,7 +152,7 @@ export class AuthService {
                 select: { firstName: true, lastName: true }
             });
             const link = process.env.FRONTEND_URL
-                    + "/?userId=" + userId + "&"
+                    + "/verify-email/?userId=" + userId + "&"
                     + "code=" + encodeURI(code); 
 
             await this.mailer.sendMail({
@@ -183,6 +194,144 @@ export class AuthService {
 
         await this.redis.del(`cc:${dto.userId}`);
         await this.redis.del(`cm:${dto.userId}`);
+    }
+
+
+    async sendForgotPasswordEmail(dto: SendVerifyEmailDTO) {
+        const user = await this.prisma.user.findUnique({
+            where: { email: dto.email },
+            select: { id: true, firstName: true, lastName: true }
+        });
+
+        if (!user) {
+            throw new NotFoundException({
+                code: ErrorCode.NOT_FOUND_USER_WITH_THIS_EMAIL
+            });
+        }
+
+        const ehash = await this.redis.get(`fc:${user.id}`);
+        const isVerified  = await this.redis.get(`fv:${user.id}`);
+        if (ehash || isVerified) {
+            throw new BadRequestException({
+                code: ErrorCode.MAIN_ALREADY_SENT
+            })
+        }
+
+        const code = generate6DigitCode();
+        const hash = hash256(code);
+
+        const pipeline = this.redis.multi();
+
+        pipeline.set(`fc:${user.id}`, hash, "EX", 15 * 60);
+        pipeline.set(`fr:${user.id}`, 0, "EX", 15 * 60);
+
+        const results = await pipeline.exec();
+        if (!results || results.some(([err, res]) => err || res !== 'OK')) {
+            throw new InternalServerErrorException({
+                code: ErrorCode.SERVER_ERROR
+            });
+        }
+
+        try {
+            await this.mailer.sendMail({
+                to: dto.email,
+                subject: "Reset password",
+                template: "forgot_password",
+                context: {
+                    name: `${user.firstName} ${user.lastName}`,
+                    code
+                }
+            });
+        } catch {
+            throw new InternalServerErrorException({
+                code: ErrorCode.SERVER_ERROR
+            });
+        }
+    }
+    async checkForgotPasswordCode(dto: CheckForgotPassCodeDTO) {
+        const user = await this.prisma.user.findUnique({
+            where: { email: dto.email },
+            select: { id: true }
+        });
+
+        if (!user) {
+            throw new NotFoundException({
+                code: ErrorCode.NOT_FOUND_USER_WITH_THIS_EMAIL
+            });
+        }
+
+        const hash = await this.redis.get(`fc:${user.id}`);
+        const retries = parseInt(await this.redis.get(`fr:${user.id}`) || "");
+        if (!hash || retries === null || retries === undefined || isNaN(retries)) {
+            
+            throw new BadRequestException({
+                code: ErrorCode.BAD_REQUEST
+            });
+        }
+
+        if (retries >= 3) {
+            await this.redis.del(`fc:${user.id}`);
+            await this.redis.del(`fr:${user.id}`);
+            throw new HttpException(
+                {
+                    code: ErrorCode.ATTEMPTS_OVER
+                },
+                HttpStatus.TOO_MANY_REQUESTS,
+            );
+        }
+
+        if (hash256(dto.code) !== hash) {
+            await this.redis.incr(`fr:${user.id}`);
+            throw new BadRequestException({
+                code: ErrorCode.INCORRECT_CODE
+            });
+        }
+
+        const pipe = this.redis.multi();
+        
+        pipe.del(`fc:${user.id}`);
+        pipe.del(`fr:${user.id}`);
+        pipe.set(`fv:${user.id}`, 1, "EX", 15 * 60);
+        
+        await pipe.exec();
+
+        return {
+            correct: true
+        }
+    }
+    async confirmResetPassword(dto: ResetPasswordDTO, res: Response, req: Request) {
+        const user = await this.prisma.user.findUnique({
+            where: { email: dto.email },
+            select: { id: true, username: true }
+        });
+
+        if (!user) {
+            throw new NotFoundException({
+                code: ErrorCode.NOT_FOUND_USER_WITH_THIS_EMAIL
+            });
+        }
+
+        const isVerified = await this.redis.get(`fv:${user.id}`);
+        if (!isVerified) {
+            throw new BadRequestException({
+                code: ErrorCode.CODE_NOT_VERIFIED_OR_EXPIRED
+            });
+        }
+
+        const newHash = await bcrypt.hash(dto.newPassword, 10);
+
+        await this.redis.del(`fv:${user.id}`);
+        await this.prisma.user.update({
+            where: { email: dto.email },
+            data: {
+                password: newHash
+            }
+        });
+
+        await this.login({
+            username: user.username,
+            password: dto.newPassword
+        }, res, req)
     }
 
     async logout(req: Request, res: Response) {

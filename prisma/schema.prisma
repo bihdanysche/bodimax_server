@@ -33,8 +33,8 @@ model RefreshToken {
 
 model Post {
   id           Int       @id @default(autoincrement())
-  authorId     Int
-  author       User      @relation(fields: [authorId], references: [id])
+  authorId     Int?
+  author       User?     @relation(fields: [authorId], references: [id], onDelete: SetNull)
   content      String
   editedAt     DateTime?
   createdAt    DateTime  @default(now())
@@ -45,18 +45,18 @@ model Post {
 model Comment {
   id            Int        @id @default(autoincrement())
 
-  authorId      Int
-  author        User       @relation(fields: [authorId], references: [id])
+  authorId      Int?
+  author        User?      @relation(fields: [authorId], references: [id], onDelete: SetNull)
 
   postId        Int
-  post          Post       @relation(fields: [postId], references: [id])
+  post          Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   parentId      Int?
-  parent        Comment?   @relation("CommentParent", fields: [parentId], references: [id])
+  parent        Comment?   @relation("CommentParent", fields: [parentId], references: [id], onDelete: Cascade)
   parentReplies Comment[]  @relation("CommentParent")
 
   repliedToId   Int?       
-  repliedTo     Comment?    @relation("CommentReplied", fields: [repliedToId], references: [id])
+  repliedTo     Comment?    @relation("CommentReplied", fields: [repliedToId], references: [id], onDelete: SetNull)
   replyFrom     Comment[]   @relation("CommentReplied")
 
   content      String
