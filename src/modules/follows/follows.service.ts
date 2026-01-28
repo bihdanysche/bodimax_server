@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable } from "@nestjs/common";
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { PaginationDTO } from "src/common/dtos/PaginationDTO";
 import { ErrorCode } from "src/exception-filter/errors.enum";
 import { PrismaService } from "src/prisma/prisma.service";
@@ -120,23 +120,29 @@ export class FollowsService {
                     }
                 },
             }
-        })
+        });
+
+        if (!query) {
+            throw new NotFoundException({
+                code: ErrorCode.INVALID_USER
+            });
+        }
 
         let nextCursor: number | null = null;
 
-        if (query!.followed.length > dto.take) {
-            const us = query!.followed.pop();
+        if (query.followed.length > dto.take) {
+            const us = query.followed.pop();
             nextCursor = us!.id;
         }
 
         return {
-            results: query!.followed.map(inf => ({
+            results: query.followed.map(inf => ({
                 id: inf.followedTo.id,
                 firstName: inf.followedTo.firstName,
                 lastName: inf.followedTo.lastName,
                 username: inf.followedTo.username,
             })),
-            total: query!._count.followed,
+            total: query._count.followed,
             nextCursor
         };
     }
@@ -164,69 +170,81 @@ export class FollowsService {
             }
         })
 
+        if (!query) {
+            throw new NotFoundException({
+                code: ErrorCode.INVALID_USER
+            });
+        }
+
         let nextCursor: number | null = null;
-        if (query!.followsTo.length > dto.take) {
-            const us = query!.followsTo.pop();
+        if (query.followsTo.length > dto.take) {
+            const us = query.followsTo.pop();
             nextCursor = us!.id;
         }
 
         return {
-            results: query!.followsTo.map(inf => ({
+            results: query.followsTo.map(inf => ({
                 id: inf.followed.id,
                 firstName: inf.followed.firstName,
                 lastName: inf.followed.lastName,
                 username: inf.followed.username,
             })),
-            total: query!._count.followsTo,
+            total: query._count.followsTo,
             nextCursor
         };
     }
 
     async getFriends(userId: number, dto: PaginationDTO) {
-        const query = await this.prisma.friendShip.findMany({
-            where: {
-                OR: [
-                    { user1Id: userId },
-                    { user2Id: userId }
-                ]
-            },
-            select: {
-                user1: {
-                    select: {
-                        id: true, username: true, firstName: true, lastName: true
-                    }
+        try {
+            const query = await this.prisma.friendShip.findMany({
+                where: {
+                    OR: [
+                        { user1Id: userId },
+                        { user2Id: userId }
+                    ]
                 },
-                user2: {
-                    select: {
-                        id: true, username: true, firstName: true, lastName: true
-                    }
+                select: {
+                    user1: {
+                        select: {
+                            id: true, username: true, firstName: true, lastName: true
+                        }
+                    },
+                    user2: {
+                        select: {
+                            id: true, username: true, firstName: true, lastName: true
+                        }
+                    },
+                    id: true
                 },
-                id: true
-            },
-            orderBy: { id: 'desc' },
-            take: dto.take + 1,
-            cursor: dto.cursor ? { id: dto.cursor } : undefined
-        });
+                orderBy: { id: 'desc' },
+                take: dto.take + 1,
+                cursor: dto.cursor ? { id: dto.cursor } : undefined
+            });
 
-        const count = await this.prisma.friendShip.count({
-            where: {
-                OR: [
-                    { user1Id: userId },
-                    { user2Id: userId }
-                ]
+            const count = await this.prisma.friendShip.count({
+                where: {
+                    OR: [
+                        { user1Id: userId },
+                        { user2Id: userId }
+                    ]
+                }
+            });
+
+            let nextCursor: number | null = null;
+            if (query.length > dto.take) {
+                const us = query.pop();
+                nextCursor = us!.id;
             }
-        });
 
-        let nextCursor: number | null = null;
-        if (query.length > dto.take) {
-            const us = query.pop();
-            nextCursor = us!.id;
-        }
-
-        return {
-            results: query.map(f => f.user1.id === userId ? f.user2 : f.user1),
-            total: count,
-            nextCursor
+            return {
+                results: query.map(f => f.user1.id === userId ? f.user2 : f.user1),
+                total: count,
+                nextCursor
+            }
+        } catch {
+            throw new NotFoundException({
+                code: ErrorCode.INVALID_USER
+            });
         }
     }
 }

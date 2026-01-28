@@ -11,12 +11,7 @@ export class UsersService {
     ) {};
 
     async me(userId: number) {
-        return await this.prisma.user.findUnique({
-            where: {id: userId},
-            omit: {
-                password: true
-            }
-        });
+        return await this.getById(userId);
     }
 
     async editUser(userId: number, dto: EditUserDTO) {
@@ -44,7 +39,15 @@ export class UsersService {
             where: { username },
             select: {
                 firstName: true, lastName: true, username: true, id: true,
-                createdAt: true
+                createdAt: true,
+                _count: {
+                    select: {
+                        followed: true,
+                        followsTo: true,
+                        friends1: true,
+                        friends2: true
+                    }
+                }
             }
         });
         
@@ -62,8 +65,16 @@ export class UsersService {
             where: { id },
             select: {
                 firstName: true, lastName: true, username: true, id: true,
-                createdAt: true
-            }
+                createdAt: true,
+                _count: {
+                    select: {
+                        followed: true,
+                        followsTo: true,
+                        friends1: true,
+                        friends2: true
+                    }
+                }
+            },
         });
 
         if (!us) {
@@ -72,7 +83,14 @@ export class UsersService {
             })
         }
 
-        return us;
+        const {_count, ...rest} = us;
+
+        return {
+            ...rest,
+            followedCount: _count.followed,
+            followersCount: _count.followsTo,
+            friendsCount: _count.friends1+_count.friends2
+        };
     }
 
     async filterUsers(dto: UsersFilterDTO) {
@@ -96,7 +114,7 @@ export class UsersService {
                     ])
                 },
                 select: {
-                    firstName: true, lastName: true, username: true, id: true
+                    firstName: true, lastName: true, username: true, id: true,
                 },
                 orderBy: { username: "asc" },
                 take: dto.take+1,
