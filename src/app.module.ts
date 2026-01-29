@@ -10,6 +10,7 @@ import { CommentsModule } from './modules/comments/comments.module';
 import { TestModule } from './modules/test/test.module';
 import { FollowsModule } from './modules/follows/follows.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
+import { NotificationsModule } from './modules/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -28,6 +29,7 @@ import { UploadsModule } from './modules/uploads/uploads.module';
     PostsModule,
     CommentsModule,
     FollowsModule,
+    NotificationsModule,
 
     //ONLYTEST!
     TestModule
