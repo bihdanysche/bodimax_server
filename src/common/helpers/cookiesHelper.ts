@@ -1,5 +1,5 @@
 import type { Response } from "express";
-import { AppConfig } from "src/config/config";
+import { AppConfig } from "src/config/app.config";
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 const ACCESS_TOKEN_AGE = AppConfig.ACCESS_TOKEN_AGE;

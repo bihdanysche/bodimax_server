@@ -4,10 +4,12 @@ import { BadRequestException, ValidationPipe } from '@nestjs/common';
 import cookieParser from 'cookie-parser';
 import { HttpErrorFilter } from './exception-filter/exception.filter';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { MulterExceptionFilter } from './exception-filter/multer-exception.filter';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.use(cookieParser());
+  app.useGlobalFilters(new MulterExceptionFilter());
   app.useGlobalFilters(new HttpErrorFilter());
   app.set('trust proxy', true);
   app.enableCors({

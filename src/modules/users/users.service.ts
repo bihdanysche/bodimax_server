@@ -1,13 +1,18 @@
-import { ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { ConflictException, Injectable, InternalServerErrorException, NotFoundException } from "@nestjs/common";
 import { ErrorCode } from "src/exception-filter/errors.enum";
 import { PrismaService } from "src/prisma/prisma.service";
 import { UsersFilterDTO } from "./dtos/UsersFilterDTO";
 import { EditUserDTO } from "./dtos/EditUserDTO";
+import { randomUUID } from "crypto";
+import { MinioService } from "src/minio/minio.service";
+import { validateImgRatio } from "src/common/helpers/imgsHelper";
+import { AppConfig } from "src/config/app.config";
 
 @Injectable()
 export class UsersService {
     constructor(
-        private readonly prisma: PrismaService
+        private readonly prisma: PrismaService,
+        private readonly minio: MinioService
     ) {};
 
     async me(userId: number) {
@@ -39,7 +44,7 @@ export class UsersService {
             where: { username },
             select: {
                 firstName: true, lastName: true, username: true, id: true,
-                createdAt: true,
+                createdAt: true, avatarUrl: true, coverUrl: true,
                 _count: {
                     select: {
                         followed: true,
@@ -65,7 +70,7 @@ export class UsersService {
             where: { id },
             select: {
                 firstName: true, lastName: true, username: true, id: true,
-                createdAt: true,
+                createdAt: true, avatarUrl: true, coverUrl: true,
                 _count: {
                     select: {
                         followed: true,
@@ -115,6 +120,7 @@ export class UsersService {
                 },
                 select: {
                     firstName: true, lastName: true, username: true, id: true,
+                    avatarUrl: true
                 },
                 orderBy: { username: "asc" },
                 take: dto.take+1,
@@ -135,6 +141,52 @@ export class UsersService {
                 results: [],
                 nextCursor: null
             }
+        }
+    }
+
+    async uploadAvatar(userId: number, file: Express.Multer.File) {
+        await validateImgRatio(file.buffer, AppConfig.ratios.avatar_ratio);
+        const url = `/avatars/${randomUUID()}_${file.originalname}`;
+
+        try {
+            await this.minio.upload(url, file.buffer, file.mimetype);
+            await this.prisma.user.update({
+                where: { id: userId },
+                data: {
+                    avatarUrl: url
+                }
+            });
+        } catch {
+            throw new InternalServerErrorException({
+                code: ErrorCode.SOMETHING_WENT_WRONG
+            })
+        }
+        
+        return {
+            newAvatarURL: url
+        }
+    }
+
+    async uploadCover(userId: number, file: Express.Multer.File) {
+        await validateImgRatio(file.buffer, AppConfig.ratios.cover_ratio);
+        const url = `/covers/${randomUUID()}_${file.originalname}`;
+
+        try {
+            await this.minio.upload(url, file.buffer, file.mimetype);
+            await this.prisma.user.update({
+                where: { id: userId },
+                data: {
+                    coverUrl: url
+                }
+            });
+        } catch {
+            throw new InternalServerErrorException({
+                code: ErrorCode.SOMETHING_WENT_WRONG
+            })
+        }
+
+        return {
+            newCoverURL: url
         }
     }
 }

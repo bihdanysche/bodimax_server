@@ -90,7 +90,7 @@ export class CommentsService {
             orderBy: { createdAt: dto.parentId ? "asc" : "desc" },
             include: {
                 author: {
-                    select: { firstName: true, lastName: true, username: true }
+                    select: { firstName: true, lastName: true, username: true, avatarUrl: true }
                 },
                 _count: {
                     select: { parentReplies: true }
@@ -100,12 +100,12 @@ export class CommentsService {
                     orderBy: { createdAt: "asc" },
                     include: {
                         author: {
-                            select: { firstName: true, lastName: true, username: true }
+                            select: { firstName: true, lastName: true, avatarUrl: true, username: true }
                         },
                         repliedTo: {
                             include: {
                                 author: {
-                                    select: { firstName: true, lastName: true, username: true }
+                                    select: { firstName: true, lastName: true, avatarUrl: true, username: true }
                                 }
                             }
                         }

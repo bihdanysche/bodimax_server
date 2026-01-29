@@ -74,8 +74,8 @@ export class AuthController {
     }
 
     @Post("refresh-token")
-    @UseGuards(AuthGuard)
     async refresh(@Req() req: Request, @Res() res: Response) {
+        console.log(req.cookies);
         if (!req.cookies.refresh_token) {
             throw new UnauthorizedException({code: ErrorCode.REFRESH_TOKEN_INVALID})
         }

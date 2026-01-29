@@ -9,7 +9,7 @@ import { PrismaClientKnownRequestError } from "@prisma/client/runtime/client";
 import * as crypto from "crypto";
 import type { Request, Response } from "express";
 import { LoginDTO } from "./dtos/LoginDTO";
-import { AppConfig } from "src/config/config";
+import { AppConfig } from "src/config/app.config";
 import { ChangePasswordDTO } from "./dtos/ChangePasswordDTO";
 import { SendVerifyEmailDTO } from "./dtos/SendVerifyEmailDTO";
 import Redis from "ioredis";
@@ -368,7 +368,7 @@ export class AuthService {
             throw new UnauthorizedException({code: ErrorCode.REFRESH_TOKEN_INVALID});
         }
         
-        await this.issueToken(req.user!.userId, res, req, tok.id);
+        await this.issueToken(tok.userId, res, req, tok.id);
     }
 
     async getSessions(sessionId: number, userId: number) {
