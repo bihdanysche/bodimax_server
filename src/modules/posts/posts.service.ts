@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "src/prisma/prisma.service";
 import { NewPostDTO } from "./dtos/NewPostDTO";
 import { EditPostDTO } from "./dtos/EditPostDTO";
@@ -6,6 +6,9 @@ import { ErrorCode } from "src/exception-filter/errors.enum";
 import { PaginationDTO } from "src/common/dtos/PaginationDTO";
 import { MinioService } from "src/minio/minio.service";
 import { randomUUID } from "crypto";
+import { PostRatingType } from "@prisma/client";
+import Redis from "ioredis";
+import { REDIS } from "src/redis/redis.module";
 
 type UploadedFile = {
     url: string;
@@ -16,7 +19,8 @@ type UploadedFile = {
 export class PostsService {
     constructor(
         private readonly prisma: PrismaService,
-        private readonly minio: MinioService
+        private readonly minio: MinioService,
+        @Inject(REDIS) private readonly redis: Redis
     ) {}
 
     async createPost(dto: NewPostDTO, authorId: number, attachments?: Express.Multer.File[]) {
@@ -178,5 +182,45 @@ export class PostsService {
                 nextCursor: null
             }
         }
+    }
+
+    async updateRating(userId: number, postId: number, state?: PostRatingType) {
+        if (!state) {
+            await this.prisma.postRating.delete({
+                where: {
+                    postId_userId: { postId, userId }
+                }
+            }).catch(() => {});
+            return;
+        }
+
+        await this.prisma.postRating.upsert({
+            where: { postId_userId: { postId, userId } },
+            update: {
+                type: state
+            },
+            create: {
+                postId, userId, type: state
+            },
+            select: { id: true }
+        });
+
+        const new_count = await this.prisma.$transaction([
+            this.prisma.postRating.count({
+                where: {
+                    postId,
+                    type: "Like"
+                }
+            }),
+            this.prisma.postRating.count({
+                where: {
+                    postId,
+                    type: "Dislike"
+                }
+            })
+        ]);
+
+        await this.redis.set(`post:${postId}:likes`, new_count[0], "EX", 60);
+        await this.redis.set(`post:${postId}:dislikes`, new_count[1], "EX", 60);
     }
 }

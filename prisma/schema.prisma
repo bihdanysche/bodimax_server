@@ -99,7 +99,7 @@ model PostRating {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   type         PostRatingType
   @@unique([postId, userId])
-  @@index([postId,type])
+  @@index([postId,type,userId])
 }
 
 enum PostRatingType {
