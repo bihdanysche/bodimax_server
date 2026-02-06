@@ -1,14 +1,19 @@
-import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "src/prisma/prisma.service";
 import { NewCommentDTO } from "./dto/NewCommentDTO";
 import { EditCommentDTO } from "./dto/EditCommentDTO";
 import { ErrorCode } from "src/exception-filter/errors.enum";
 import { FilterCommentsDTO } from "./dto/FilterCommentsDTO";
+import { REDIS } from "src/redis/redis.module";
+import Redis from "ioredis";
+import { EventEmitter2 } from "@nestjs/event-emitter";
 
 @Injectable()
 export class CommentsService {
     constructor(
-        private readonly prisma: PrismaService
+        private readonly prisma: PrismaService,
+        private readonly eventEmitter: EventEmitter2,
+        @Inject(REDIS) private readonly redis: Redis
     ) {}
 
     async createComment(dto: NewCommentDTO, authorId: number) {
@@ -29,7 +34,7 @@ export class CommentsService {
                 parentId = comment.parentId ? comment.parentId : dto.replyTo;
             }
 
-            return await this.prisma.comment.create({
+            const newComm = await this.prisma.comment.create({
                 data: {
                     content: dto.content,
                     postId: dto.postId,
@@ -38,6 +43,9 @@ export class CommentsService {
                     parentId,
                 }
             });
+
+            this.eventEmitter.emit("comment.created", { postId: dto.postId });
+            return newComm;
         } catch {
             throw new BadRequestException({
                 code: ErrorCode.INVALID_POST_OR_REPLY
@@ -66,12 +74,13 @@ export class CommentsService {
 
     async deleteComment(commentId: number, userId: number) {
         try {
-            return await this.prisma.comment.delete({
+            const res = await this.prisma.comment.delete({
                 where: {
                     id: commentId,
                     authorId: userId
                 }
             });
+            this.eventEmitter.emit("comment.deleted", { postId: res.postId });
         } catch {
             throw new NotFoundException({
                 code: ErrorCode.INVALID_COMMENT

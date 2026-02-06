@@ -9,6 +9,7 @@ import { randomUUID } from "crypto";
 import { PostRatingType } from "@prisma/client";
 import Redis from "ioredis";
 import { REDIS } from "src/redis/redis.module";
+import { OnEvent } from "@nestjs/event-emitter";
 
 type UploadedFile = {
     url: string;
@@ -18,6 +19,7 @@ type Rating = {
     likes: number;
     dislikes: number;
     views: number;
+    comments: number,
 };
 
 @Injectable()
@@ -115,11 +117,11 @@ export class PostsService {
                         url: true, mimeType: true
                     }
                 },
-                _count: {
-                    select: {
-                        comments: true
-                    }
-                }
+                ratings: userId ? {
+                    where: { userId },
+                    select: { type: true },
+                    take: 1
+                } : undefined
             }
         });
 
@@ -130,11 +132,11 @@ export class PostsService {
         }
     
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        const {_count, views:_, ...rest} = post;
+        const {views:_, ratings, ...rest} = post;
         const rating = await this.getPostRating(postId, post.views, userId);
         
         return {
-            commentsCount: _count.comments,
+            yourRating: (ratings && ratings.length > 0) ? ratings[0].type : null,
             ...rating,
             ...rest
         }
@@ -161,11 +163,11 @@ export class PostsService {
                             url: true, mimeType: true
                         }
                     },
-                    _count: {
-                        select: {
-                            comments: true
-                        }
-                    }
+                    ratings: userId ? {
+                        where: { userId },
+                        select: { type: true },
+                        take: 1
+                    } : undefined
                 }
             });
 
@@ -182,7 +184,7 @@ export class PostsService {
             return {
                 results: posts.map(p => {
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                    const {_count, views:_, ...rest} = p;
+                    const {views:_, ratings:yourRating, ...rest} = p;
                     const rat = ratings[p.id] || {
                         likes: 0,
                         dislikes: 0,
@@ -190,7 +192,7 @@ export class PostsService {
                     };
 
                     return {
-                        commentsCount: _count.comments,
+                        yourRating: (yourRating && yourRating.length > 0) ? yourRating[0].type : null,
                         ...rat,
                         ...rest
                     }
@@ -258,6 +260,7 @@ export class PostsService {
     async getPostsRating(postIds: number[][], userId?: number): Promise<Record<number, Rating>> {
         const result: Record<number, Rating> = {};
         const missedIdsForRating: number[] = [];
+        const missedIdsForComments: number[] = [];
 
         if (postIds.length === 0) {
             return result;
@@ -269,7 +272,7 @@ export class PostsService {
 
             const ratingKey = `post:${postId}`;
             const viewKey = `postpf:${postId}`;
-            pipe.hmget(ratingKey, "likes", "dislikes");
+            pipe.hmget(ratingKey, "likes", "dislikes", "comments");
             if (userId) {
                 pipe.pfadd(viewKey, userId);
             } else pipe.set("_____bb", 0);
@@ -284,21 +287,27 @@ export class PostsService {
 
         for (let i = 0; i < postIds.length; i++) {
             const postId = postIds[i][0];
-            const r = res[i*3][1] as [string, string];
+            const r = res[i*3][1] as [string, string, string];
             const likes = r[0];
             const dislikes = r[1];
+            const comments = r[2];
             const views = res[i*3+2][1];
             
             const rating: Rating = {
                 likes: 0,
                 dislikes: 0,
-                views: postIds[i][1]
+                views: postIds[i][1],
+                comments: 0
             };
 
             if (likes !== null && dislikes !== null) {
                 rating.likes = Number(likes);
                 rating.dislikes = Number(dislikes);
             } else missedIdsForRating.push(postId);
+
+            if (comments !== null) {
+                rating.comments = Number(comments);
+            } else missedIdsForComments.push(postId)
 
             if (views !== null) {
                 rating.views += Number(views);
@@ -307,28 +316,47 @@ export class PostsService {
             result[postId] = rating;
         };
 
-        if (missedIdsForRating.length === 0) {
+        if (missedIdsForRating.length === 0 && missedIdsForComments.length === 0) {
             return result;
         }
 
-        const ratings = await this.prisma.postRating.groupBy({
-            by: ["postId", "type"],
-            _count: true,
-            where: { postId: { in: missedIdsForRating } }
-        });
-
         const cachePipe = this.redis.pipeline();
 
-        for (const rat of ratings) {
-            const postId = rat.postId;
-            const ratingKey = `post:${postId}`;
-            const field: keyof Omit<Rating, "views"> = rat.type === "Like" ? "likes" : "dislikes";
+        if (missedIdsForRating.length > 0) {
+            const ratings = await this.prisma.postRating.groupBy({
+                by: ["postId", "type"],
+                _count: true,
+                where: { postId: { in: missedIdsForRating } },
+            });
 
-            result[postId][field] = rat._count;
-            cachePipe.hset(ratingKey, { [field]: rat._count });
-            cachePipe.expire(ratingKey, 60);
+            for (const rat of ratings) {
+                const postId = rat.postId;
+                const ratingKey = `post:${postId}`;
+                const field: keyof Omit<Rating, "views"> = rat.type === "Like" ? "likes" : "dislikes";
+
+                result[postId][field] = rat._count;
+                cachePipe.hset(ratingKey, { [field]: rat._count });
+                cachePipe.expire(ratingKey, 60);
+            }
         }
-        
+
+        if (missedIdsForComments.length > 0) {
+            const commsCount = await this.prisma.comment.groupBy({
+                by: ["postId"],
+                _count: true,
+                where: { postId: { in: missedIdsForComments } },
+            });
+            
+            for (const rat of commsCount) {
+                const postId = rat.postId;
+                const ratingKey = `post:${postId}`;
+
+                result[postId].comments = rat._count;
+                cachePipe.hset(ratingKey, { comments: rat._count });
+                cachePipe.expire(ratingKey, 60);
+            }
+        }
+
         void cachePipe.exec();
         return result;
     }
@@ -338,7 +366,7 @@ export class PostsService {
         return resp[postId];
     }
 
-    async incPostRating(postId: number, type: "likes" | "dislikes", val: number, updRating?: boolean) {
+    async incPostRating(postId: number, type: keyof Rating, val: number, updRating?: boolean) {
         const key = `post:${postId}`;
         const exists = await this.redis.exists(key);
 
@@ -349,5 +377,15 @@ export class PostsService {
         if (updRating) {
             return await this.getPostRating(postId, 0);
         }
+    }
+
+    @OnEvent("comment.created")
+    async onCommentCreated(payload: { postId: number }) {
+        await this.incPostRating(payload.postId, "comments", 1);
+    }
+
+    @OnEvent("comment.deleted")
+    async onCommentDeleted(payload: { postId: number }) {
+        await this.incPostRating(payload.postId, "comments", -1);
     }
 }

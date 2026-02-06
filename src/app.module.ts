@@ -11,6 +11,7 @@ import { TestModule } from './modules/test/test.module';
 import { FollowsModule } from './modules/follows/follows.module';
 import { UploadsModule } from './modules/uploads/uploads.module';
 import { NotificationsModule } from './modules/notifications/notifications.module';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { NotificationsModule } from './modules/notifications/notifications.modul
       secret: process.env.JWT_SECRET,
       signOptions: { expiresIn: AppConfig.ACCESS_TOKEN_AGE }
     }),
+    EventEmitterModule.forRoot(),
     PrismaModule,
     AuthModule,
     UploadsModule,
