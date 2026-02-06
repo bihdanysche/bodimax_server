@@ -5,6 +5,7 @@ import { PrismaModule } from "src/prisma/prisma.module";
 import { AuthModule } from "../auth/auth.module";
 import { MinioModule } from "src/minio/minio.module";
 import { RedisModule } from "src/redis/redis.module";
+import { PostsJobService } from "./posts-job.service";
 
 @Module({
     imports: [
@@ -13,7 +14,7 @@ import { RedisModule } from "src/redis/redis.module";
         MinioModule,
         RedisModule
     ],
-    providers: [PostsService],
-    controllers: [PostsController]
+    providers: [ PostsService, PostsJobService ],
+    controllers: [ PostsController ]
 })
 export class PostsModule {};

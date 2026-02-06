@@ -14,6 +14,11 @@ type UploadedFile = {
     url: string;
     mimeType: string;
 };
+type Rating = {
+    likes: number;
+    dislikes: number;
+    views: number;
+};
 
 @Injectable()
 export class PostsService {
@@ -126,13 +131,11 @@ export class PostsService {
     
         // eslint-disable-next-line @typescript-eslint/no-unused-vars
         const {_count, views:_, ...rest} = post;
-        const rating = await this.getPostRating(postId);
-        const views = await this.getPostViews(postId, post.views, userId);
+        const rating = await this.getPostRating(postId, post.views, userId);
         
         return {
             commentsCount: _count.comments,
-            rating,
-            views,
+            ...rating,
             ...rest
         }
     }
@@ -166,17 +169,10 @@ export class PostsService {
                 }
             });
 
-            const ratings: Array<any> = [];
-            for (let i = 0; i < posts.length; i++) {
-                const rating = await this.getPostRating(posts[i].id);
-                ratings.push(rating);
-            }
-
-            const views: Array<any> = [];
-            for (let i = 0; i < posts.length; i++) {
-                const count = await this.getPostViews(posts[i].id, posts[i].views, userId);
-                views.push(count);
-            }
+            const ratings: Record<number, Rating> = await this.getPostsRating(
+                posts.map(p => [ p.id, p.views ]),
+                userId
+            );
 
             let nextCursor: number | null = null;
             if (posts.length > dto.take) {
@@ -184,20 +180,25 @@ export class PostsService {
             }
 
             return {
-                results: posts.map((p,i) => {
+                results: posts.map(p => {
                     // eslint-disable-next-line @typescript-eslint/no-unused-vars
                     const {_count, views:_, ...rest} = p;
-                    
+                    const rat = ratings[p.id] || {
+                        likes: 0,
+                        dislikes: 0,
+                        views: p.views
+                    };
+
                     return {
                         commentsCount: _count.comments,
-                        rating: ratings[i],
-                        views: views[i],
+                        ...rat,
                         ...rest
                     }
                 }),
                 nextCursor
             }
-        } catch {
+        } catch(e) {
+            console.log(e)
             return {
                 results: [],
                 nextCursor: null
@@ -253,39 +254,88 @@ export class PostsService {
 
         return await this.incPostRating(postId, state === "Like" ? "likes" : "dislikes", 1, true);
     }
+    
+    async getPostsRating(postIds: number[][], userId?: number): Promise<Record<number, Rating>> {
+        const result: Record<number, Rating> = {};
+        const missedIdsForRating: number[] = [];
 
-    async getPostRating(postId: number) {
-        const key = `post:${postId}`;
-        const exists = await this.redis.exists(key);
-
-        if (!exists) {
-            const query = await this.prisma.postRating.groupBy({
-                by: "type",
-                where: { postId },
-                _count: true,
-            });
-            
-            const rating = query.reduce(
-                (acc, item) => {
-                    acc[item.type === "Like" ? "likes" : "dislikes"] = item._count;
-                    return acc;
-                }, 
-                { likes: 0, dislikes: 0 }
-            );
-
-            await this.redis.multi()
-                .hset(key, rating)
-                .expire(key, 60)
-                .exec();
-            
-            return rating;
-        } else {
-            const res = await this.redis.hmget(key, "likes", "dislikes");
-            return {
-                likes: res[0],
-                dislikes: res[1]
-            }
+        if (postIds.length === 0) {
+            return result;
         }
+
+        const pipe = this.redis.pipeline();
+        for (const post of postIds) {
+            const postId = post[0];
+
+            const ratingKey = `post:${postId}`;
+            const viewKey = `postpf:${postId}`;
+            pipe.hmget(ratingKey, "likes", "dislikes");
+            if (userId) {
+                pipe.pfadd(viewKey, userId);
+            } else pipe.set("_____bb", 0);
+            pipe.pfcount(viewKey);
+            pipe.sadd("postvs", postId);
+        }
+
+        const res = await pipe.exec();
+        if (!res) {
+            return result;
+        }
+
+        for (let i = 0; i < postIds.length; i++) {
+            const postId = postIds[i][0];
+            const r = res[i*3][1] as [string, string];
+            const likes = r[0];
+            const dislikes = r[1];
+            const views = res[i*3+2][1];
+            
+            const rating: Rating = {
+                likes: 0,
+                dislikes: 0,
+                views: postIds[i][1]
+            };
+
+            if (likes !== null && dislikes !== null) {
+                rating.likes = Number(likes);
+                rating.dislikes = Number(dislikes);
+            } else missedIdsForRating.push(postId);
+
+            if (views !== null) {
+                rating.views += Number(views);
+            }
+
+            result[postId] = rating;
+        };
+
+        if (missedIdsForRating.length === 0) {
+            return result;
+        }
+
+        const ratings = await this.prisma.postRating.groupBy({
+            by: ["postId", "type"],
+            _count: true,
+            where: { postId: { in: missedIdsForRating } }
+        });
+
+        const cachePipe = this.redis.pipeline();
+
+        for (const rat of ratings) {
+            const postId = rat.postId;
+            const ratingKey = `post:${postId}`;
+            const field: keyof Omit<Rating, "views"> = rat.type === "Like" ? "likes" : "dislikes";
+
+            result[postId][field] = rat._count;
+            cachePipe.hset(ratingKey, { [field]: rat._count });
+            cachePipe.expire(ratingKey, 60);
+        }
+        
+        void cachePipe.exec();
+        return result;
+    }
+
+    async getPostRating(postId: number, initialViews: number, userId?: number) {
+        const resp = await this.getPostsRating([ [postId, initialViews] ], userId);
+        return resp[postId];
     }
 
     async incPostRating(postId: number, type: "likes" | "dislikes", val: number, updRating?: boolean) {
@@ -297,19 +347,7 @@ export class PostsService {
         }
 
         if (updRating) {
-            return await this.getPostRating(postId); 
+            return await this.getPostRating(postId, 0);
         }
-    }
-
-    async getPostViews(postId: number, initialViews: number, userId?: number) {
-        const additionalViewsKey = `postpf:${postId}`;
-
-        if (userId) {
-            await this.redis.pfadd(additionalViewsKey, userId);
-        }
-
-        const count = await this.redis.pfcount(additionalViewsKey);
-
-        return initialViews + count;
     }
 }

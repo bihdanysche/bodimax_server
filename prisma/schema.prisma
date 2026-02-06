@@ -38,8 +38,8 @@ model Notification {
   @@index([userId, id, kind])
 }
 enum NotifcationKind {
-  LikedPost
-  LikedComment
+  // LikedPost
+  // LikedComment
   CommentedPost
   CommentedComment
   NewFollow
