@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, Inject, Injectable, NotFoundException } from "@nestjs/common";
 import { PrismaService } from "src/prisma/prisma.service";
 import { NewPostDTO } from "./dtos/NewPostDTO";
 import { EditPostDTO } from "./dtos/EditPostDTO";
@@ -95,7 +95,7 @@ export class PostsService {
         }
     }
 
-    async getPost(postId: number) {
+    async getPost(postId: number, userId?: number) {
         const post = await this.prisma.post.findUnique({
             where: { id: postId },
             include: {
@@ -123,16 +123,21 @@ export class PostsService {
                 code: ErrorCode.INVALID_POST
             })
         }
-
-        const {_count, ...rest} = post;
+    
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        const {_count, views:_, ...rest} = post;
+        const rating = await this.getPostRating(postId);
+        const views = await this.getPostViews(postId, post.views, userId);
         
         return {
             commentsCount: _count.comments,
+            rating,
+            views,
             ...rest
         }
     }
 
-    async filterPosts(dto: PaginationDTO, authorId?: number) {
+    async filterPosts(dto: PaginationDTO, authorId?: number, userId?: number) {
         try {
             const posts = await this.prisma.post.findMany({
                 where: {
@@ -161,16 +166,32 @@ export class PostsService {
                 }
             });
 
+            const ratings: Array<any> = [];
+            for (let i = 0; i < posts.length; i++) {
+                const rating = await this.getPostRating(posts[i].id);
+                ratings.push(rating);
+            }
+
+            const views: Array<any> = [];
+            for (let i = 0; i < posts.length; i++) {
+                const count = await this.getPostViews(posts[i].id, posts[i].views, userId);
+                views.push(count);
+            }
+
             let nextCursor: number | null = null;
             if (posts.length > dto.take) {
                 nextCursor = posts.pop()!.id;
             }
 
             return {
-                results: posts.map(p => {
-                    const {_count, ...rest} = p;
+                results: posts.map((p,i) => {
+                    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+                    const {_count, views:_, ...rest} = p;
+                    
                     return {
                         commentsCount: _count.comments,
+                        rating: ratings[i],
+                        views: views[i],
                         ...rest
                     }
                 }),
@@ -185,13 +206,34 @@ export class PostsService {
     }
 
     async updateRating(userId: number, postId: number, state?: PostRatingType) {
+        const rec = await this.prisma.postRating.findUnique({
+            where: { postId_userId: {postId, userId} },
+            select: { type: true }
+        });
+
+        if ((rec && rec.type === state) || (!rec && !state)) {
+            throw new BadRequestException({
+                code: ErrorCode.ALREADY_SETTED_THIS_RATING_STATE
+            });
+        }
+
         if (!state) {
-            await this.prisma.postRating.delete({
-                where: {
-                    postId_userId: { postId, userId }
+            let type: "likes" | "dislikes" = "likes";
+            let inc = 0;
+
+            if (rec) {
+                inc = -1;
+                if (rec.type === "Dislike") {
+                    type = "dislikes";
                 }
-            }).catch(() => {});
-            return;
+                await this.prisma.postRating.delete({
+                    where: {
+                        postId_userId: { postId, userId }
+                    }
+                });
+            }
+
+            return await this.incPostRating(postId, type, inc, true);
         }
 
         await this.prisma.postRating.upsert({
@@ -205,22 +247,69 @@ export class PostsService {
             select: { id: true }
         });
 
-        const new_count = await this.prisma.$transaction([
-            this.prisma.postRating.count({
-                where: {
-                    postId,
-                    type: "Like"
-                }
-            }),
-            this.prisma.postRating.count({
-                where: {
-                    postId,
-                    type: "Dislike"
-                }
-            })
-        ]);
+        if (rec) {
+            await this.incPostRating(postId, state === "Like" ? "dislikes" : "likes", -1);
+        }
 
-        await this.redis.set(`post:${postId}:likes`, new_count[0], "EX", 60);
-        await this.redis.set(`post:${postId}:dislikes`, new_count[1], "EX", 60);
+        return await this.incPostRating(postId, state === "Like" ? "likes" : "dislikes", 1, true);
+    }
+
+    async getPostRating(postId: number) {
+        const key = `post:${postId}`;
+        const exists = await this.redis.exists(key);
+
+        if (!exists) {
+            const query = await this.prisma.postRating.groupBy({
+                by: "type",
+                where: { postId },
+                _count: true,
+            });
+            
+            const rating = query.reduce(
+                (acc, item) => {
+                    acc[item.type === "Like" ? "likes" : "dislikes"] = item._count;
+                    return acc;
+                }, 
+                { likes: 0, dislikes: 0 }
+            );
+
+            await this.redis.multi()
+                .hset(key, rating)
+                .expire(key, 60)
+                .exec();
+            
+            return rating;
+        } else {
+            const res = await this.redis.hmget(key, "likes", "dislikes");
+            return {
+                likes: res[0],
+                dislikes: res[1]
+            }
+        }
+    }
+
+    async incPostRating(postId: number, type: "likes" | "dislikes", val: number, updRating?: boolean) {
+        const key = `post:${postId}`;
+        const exists = await this.redis.exists(key);
+
+        if (exists) {
+            await this.redis.hincrby(key, type, val);
+        }
+
+        if (updRating) {
+            return await this.getPostRating(postId); 
+        }
+    }
+
+    async getPostViews(postId: number, initialViews: number, userId?: number) {
+        const additionalViewsKey = `postpf:${postId}`;
+
+        if (userId) {
+            await this.redis.pfadd(additionalViewsKey, userId);
+        }
+
+        const count = await this.redis.pfcount(additionalViewsKey);
+
+        return initialViews + count;
     }
 }

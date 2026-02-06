@@ -7,6 +7,8 @@ import { EditPostDTO } from "./dtos/EditPostDTO";
 import { PaginationDTO } from "src/common/dtos/PaginationDTO";
 import { FilesInterceptor } from "@nestjs/platform-express";
 import { anyFileUploadConfig } from "src/config/multer.config";
+import { SetRatingDTO } from "./dtos/SetRatingDTO";
+import { OptionalAuthGuard } from "../auth/guards/optional-auth.guard";
 
 @Controller("/posts")
 export class PostsController {
@@ -19,6 +21,12 @@ export class PostsController {
     @UseInterceptors(FilesInterceptor("files", 4, anyFileUploadConfig))
     async createNewPost(@Body() dto: NewPostDTO, @UserId() usId: number, @UploadedFiles() attachments?: Express.Multer.File[]) {
         return await this.postsService.createPost(dto, usId, attachments);
+    }
+
+    @Post("/:id/set-rating")
+    @UseGuards(AuthGuard)
+    async updateRating(@Query() dto: SetRatingDTO, @UserId() usId: number, @Param("id", ParseIntPipe) postId: number) {
+        return await this.postsService.updateRating(usId, postId, dto.newState);
     }
 
     @Patch("/:id/edit")
@@ -36,17 +44,20 @@ export class PostsController {
     }
 
     @Get("/")
-    async getAllPosts(@Query() dto: PaginationDTO) {
-        return await this.postsService.filterPosts(dto);
+    @UseGuards(OptionalAuthGuard)
+    async getAllPosts(@Query() dto: PaginationDTO, @UserId() userId: number) {
+        return await this.postsService.filterPosts(dto, undefined, userId);
     }
 
     @Get("/from-user/:id")
-    async getAllPostsFromUser(@Param("id", ParseIntPipe) userId: number, @Query() dto: PaginationDTO) {
-        return await this.postsService.filterPosts(dto, userId);
+    @UseGuards(OptionalAuthGuard)
+    async getAllPostsFromUser(@Param("id", ParseIntPipe) userId: number, @Query() dto: PaginationDTO, @UserId() authUserId: number) {
+        return await this.postsService.filterPosts(dto, userId, authUserId);
     }
 
     @Get("/:id")
-    async getPost(@Param("id", ParseIntPipe) postId: number) {
-        return await this.postsService.getPost(postId);
+    @UseGuards(OptionalAuthGuard)
+    async getPost(@Param("id", ParseIntPipe) postId: number, @UserId() userId: number) {
+        return await this.postsService.getPost(postId, userId);
     }
 }
